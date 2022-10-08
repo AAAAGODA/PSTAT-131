@@ -1,0 +1,12 @@
+# HW2
+
+```{r}
+library(tidyverse)
+library(readr)
+```
+
+Import dataset
+```{r}
+abalone <- read_csv(file = 'abalone.csv')
+```
+
