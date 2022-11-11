@@ -1,0 +1,90 @@
+# HW4
+
+```{r}
+library(tidyverse)
+library(tidymodels)
+library(ggplot2)
+library(dplyr)
+library(MASS)
+library(discrim)
+library(klaR)
+```
+
+# Importing the dataset
+```{r}
+titanic <- read.csv('data/titanic.csv')
+titanic$survived <- as.factor(titanic$survived)
+titanic$pclass <- as.factor(titanic$pclass)
+```
+
+# Q1
+```{r}
+set.seed(3435)
+titanic_split <- initial_split(titanic, prop = 0.7,
+                               strata = survived)
+titanic_testing <- testing(titanic_split)
+titanic_training <- training(titanic_split)
+head(titanic_training)
+```
+The proportion of the training data I chose is 0.7 so that there will be 623 observations for the training set which is enough for building the model. There will be 268 observations for the testing set which is enough to test the validity of the model.
+
+# Q2
+```{r}
+titanic_training2 <- titanic_training %>% dplyr :: select(survived, 
+                                                          pclass, sex, age, sib_sp, parch, fare)
+titanic_fold <- vfold_cv(titanic_training2, v = 10)
+```
+
+# Q3
+We used k-fold cross-validation to randomly split the training set into groups of approximately equal size. We take one of the groups as the validation set and the rest as training set to build the model. K-fold cross-validation is used to avoid overfitting and choose the best-fitted general model. If we did use the entire training set, the method would be train test validation split.
+
+# Q4
+```{r}
+titanic_recipe <- recipe(survived ~ ., data = titanic_training2) %>%
+                  step_impute_linear(age)
+titanic_recipe <- titanic_recipe %>% step_dummy(sex)
+titanic_recipe <- step_interact(titanic_recipe, terms = ~ fare : starts_with('sex'))
+titanic_recipe <- step_interact(titanic_recipe, terms = ~ age : fare)
+
+titanic_recipe
+```
+```{r}
+logistic_model <- logistic_reg() %>% set_engine('glm') %>% set_mode('classification')
+logistic_workflow <- workflow() %>% add_model(logistic_model) %>% add_recipe(titanic_recipe)
+
+lda_model <- discrim_linear() %>% set_engine('MASS') %>% set_mode('classification')
+lda_workflow <- workflow() %>% add_model(lda_model) %>% add_recipe(titanic_recipe)
+
+qda_model <- discrim_quad() %>% set_engine('MASS') %>% set_mode('classification')
+qda_workflow <- workflow() %>% add_model(qda_model) %>% add_recipe(titanic_recipe)
+```
+We will be fitting a total of 30 models.
+
+# Q5
+```{r}
+log_fit <- fit_resamples(logistic_model, titanic_recipe, titanic_fold)
+lda_fit <- fit_resamples(lda_model, titanic_recipe, titanic_fold)
+qda_fit <- fit_resamples(qda_model, titanic_recipe, titanic_fold)
+```
+
+# Q6
+```{r}
+collect_metrics(log_fit)
+collect_metrics(lda_fit)
+collect_metrics(qda_fit)
+```
+The logistic model performed the best because it has the highest mean accuracy and also the second lowest standard error which is only 0.00005 higher than the linear discriminant analysis model.
+
+# Q7
+```{r}
+logistic_fit <- fit(logistic_workflow, titanic_training2)
+```
+# Q8
+```{r}
+titanic_testing2 <- titanic_testing %>% dplyr::select(survived, 
+                                                      pclass, sex, age, sib_sp, parch, fare)
+predict(logistic_fit, new_data = titanic_testing2, type = "class") %>% 
+  bind_cols(titanic_testing2 %>% dplyr :: select(survived)) %>% 
+  accuracy(truth = survived, estimate = .pred_class)
+```
+The testing accuracy of the model is slightly higher than the accuracy across folds.
