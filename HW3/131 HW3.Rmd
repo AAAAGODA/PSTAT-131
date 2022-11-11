@@ -1,0 +1,150 @@
+---
+output:
+  html_document: default
+  pdf_document: default
+---
+# HW3
+
+```{r}
+library(tidyverse)
+library(tidymodels)
+library(ggplot2)
+library(corrplot)
+library(dplyr)
+library(corrr)
+library(MASS)
+library(discrim)
+library(klaR)
+```
+
+# Importing the dataset
+```{r}
+titanic <- read.csv('data/titanic.csv')
+titanic$survived <- as.factor(titanic$survived)
+titanic$pclass <- as.factor(titanic$pclass)
+```
+
+# Q1
+```{r}
+set.seed(3435)
+titanic_split <- initial_split(titanic, prop = 0.7,
+                               strata = survived)
+titanic_testing <- testing(titanic_split)
+titanic_training <- training(titanic_split)
+head(titanic_training)
+```
+The proportion of the training data I chose is 0.7 so that there will be 623 observations for the training set which is enough for building the model. There will be 268 observations for the testing set which is enough to test the validity of the model.
+
+The training data set includes missing data. There are a few observations that are missing the data for variable 'age'. Also, most of the observations are missing the data for variable 'cabin', so it is reasonable to exclude this variable while building the ML model.
+
+By stratifying on the outcome variable, 'survived', we are able to ensure that the proportion of the survived individuals and the dead individuals are the same in both the training set and the testing set.
+
+# Q2
+```{r}
+ggplot(data = titanic_training, aes(x = survived)) + geom_bar()
+```
+In the training set, the number of individuals who survived is approximately 240 while the number of individuals who died is approximately 380. In other words, the amount of people who survived is approximately 2/3 of the people who died.
+
+# Q3
+```{r}
+titanic_cor <- titanic_training %>% dplyr :: select(age, sib_sp, parch, fare)
+cor_matrix <- cor(titanic_cor, use="pairwise.complete.obs")
+corrplot(cor_matrix, method = 'number', type = 'lower', diag = F)
+```
+From the correlation matrix, we can see there is no strong correlations between the variables. The strongest correlation is between parch and sib_sp with a value of 0.43.
+
+# Q4
+```{r}
+titanic_training2 <- titanic_training %>% dplyr :: select(survived, 
+                                                          pclass, sex, age, sib_sp, parch, fare)
+titanic_recipe <- recipe(survived ~ ., data = titanic_training2) %>%
+                  step_impute_linear(age)
+titanic_recipe <- titanic_recipe %>% step_dummy(sex)
+titanic_recipe <- step_interact(titanic_recipe, terms = ~ fare : starts_with('sex'))
+titanic_recipe <- step_interact(titanic_recipe, terms = ~ age : fare)
+
+titanic_recipe
+```
+
+# Q5
+```{r}
+logistic_model <- logistic_reg() %>% set_engine('glm') %>% set_mode('classification')
+logistic_workflow <- workflow() %>% add_model(logistic_model) %>% add_recipe(titanic_recipe)
+logistic_fit <- fit(logistic_workflow, titanic_training2)
+```
+
+# Q6
+```{r}
+lda_model <- discrim_linear() %>% set_engine('MASS') %>% set_mode('classification')
+lda_workflow <- workflow() %>% add_model(lda_model) %>% add_recipe(titanic_recipe)
+lda_fit <- fit(lda_workflow, titanic_training2)
+```
+
+# Q7
+```{r}
+qda_model <- discrim_quad() %>% set_engine('MASS') %>% set_mode('classification')
+qda_workflow <- workflow() %>% add_model(qda_model) %>% add_recipe(titanic_recipe)
+qda_fit <- fit(qda_workflow, titanic_training2)
+```
+
+# Q8
+```{r}
+nb_model <- naive_Bayes() %>% set_engine('klaR') %>% set_mode('classification') %>%
+            set_args(usekernel = F)
+nb_workflow <- workflow() %>% add_model(nb_model) %>% add_recipe(titanic_recipe)
+nb_fit <- fit(nb_workflow, titanic_training2)
+```
+
+# Q9 
+```{r}
+predict(logistic_fit, new_data = titanic_training2, type = "class")
+logistic_acc <- augment(logistic_fit, new_data = titanic_training2)
+accuracy(data = logistic_acc, truth = survived, estimate = .pred_class)
+
+```
+
+```{r}
+predict(lda_fit, new_data = titanic_training2, type = "class")
+lda_acc <- augment(lda_fit, new_data = titanic_training2)
+accuracy(data = lda_acc, truth = survived, estimate = .pred_class)
+```
+
+```{r}
+predict(qda_fit, new_data = titanic_training2, type = "class")
+qda_acc <- augment(qda_fit, new_data = titanic_training2)
+accuracy(data = qda_acc, truth = survived, estimate = .pred_class)
+```
+
+```{r, warning = F}
+predict(nb_fit, new_data = titanic_training2, type = "class")
+nb_acc <- augment(nb_fit, new_data = titanic_training2)
+accuracy(data = nb_acc, truth = survived, estimate = .pred_class)
+```
+
+Conclusion: The logistic regression model has the highest accuracy among all four models.
+
+# Q10
+```{r}
+titanic_testing2 <- titanic_testing %>% dplyr::select(survived, 
+                                                      pclass, sex, age, sib_sp, parch, fare)
+predict(logistic_fit, new_data = titanic_testing2, type = "class")
+logistic_acc_test <- augment(logistic_fit, new_data = titanic_testing2)
+accuracy(data = logistic_acc_test, truth = survived, estimate = .pred_class)
+
+conf_mat(data = logistic_acc_test, truth = survived, estimate = .pred_class) %>%
+autoplot(type = "heatmap")
+```
+
+```{r}
+roc_curve(logistic_acc_test, truth = survived, estimate = .pred_No) %>%
+autoplot()
+```
+
+```{r}
+roc_auc(logistic_acc_test, truth = survived, .pred_No)
+```
+
+The accuracy of the model on the testing data is 0.8320896 which means the model is performing quite well. The accuracy of the model on the training set and the testing set are different primarily because the number of observations in each set is different. 
+
+
+
