@@ -1,0 +1,114 @@
+---
+output:
+  html_document: default
+  pdf_document: default
+---
+# HW5
+
+Load Packages
+```{r}
+library(janitor)
+library(ggplot2)
+library(dplyr)
+library(tidyverse)
+library(tidymodels)
+library(glmnet)
+```
+# 1
+Import Data
+```{r}
+pokemon <- read.csv('data/pokemon.csv')
+pokemon1 <- clean_names(pokemon)
+```
+The clean_names() function helps to simplify variable names. It cleans the characters within variable names and result in variable names only with _ character, numbers, and letters with either all lower case of upper case. It is useful because by using clean_names(), we will be dealing with variable names with uniform format which does not involve multiple characters.
+
+# 2
+```{r}
+ggplot(data = pokemon1, aes(x = type_1)) + geom_bar() + coord_flip()
+```
+There are 18 classes of type_1. Among those, Fairy, Flying, Ice are the classes with very few Pokemon compare to the other classes.
+
+```{r}
+pokemon_filtered <- pokemon1 %>%
+  filter(type_1 == "Bug" | type_1 == "Fire" | type_1 == "Grass" | type_1 == "Normal" | type_1 == "Water" | type_1 == "Physic")
+
+pokemon_filtered$type_1 <- as.factor(pokemon_filtered$type_1)
+pokemon_filtered$legendary <- as.factor(pokemon_filtered$legendary)
+pokemon_filtered$generation <- as.factor(pokemon_filtered$generation)
+```
+Also has to turn generation into factor so that tune_grid() function in Q6 would work.
+
+# 3
+```{r}
+set.seed(3435)
+pokemon_split <- initial_split(pokemon_filtered, prop = 0.7,
+                               strata = type_1)
+pokemon_testing <- testing(pokemon_split)
+pokemon_training <- training(pokemon_split)
+```
+The proportion of the training data I chose is 0.7 so that there will be 279 observations for the training set which is enough for building the model. There will be 122 observations for the testing set which is enough to test the validity of the model.
+
+```{r}
+pokemon_fold <- vfold_cv(pokemon_training, v = 5, strata = type_1)
+```
+Since we are dealing with qualitative variable, stratified sampling is helpful. Stratifying the folds will result in more consistent results among each fold in the training set.
+
+# 4
+```{r}
+pokemon_training2 <- pokemon_training %>% dplyr :: select(type_1, legendary, 
+                                                          generation, sp_atk, attack, speed, defense, hp, sp_def)
+pokemon_recipe <- recipe(type_1 ~ ., data = pokemon_training2) %>% step_dummy(legendary) %>% 
+  step_dummy(generation) %>% step_normalize(all_predictors())
+```
+
+# 5
+```{r}
+mr_model <- multinom_reg(penalty = tune(), mixture = tune()) %>% set_engine("glmnet") %>%
+  set_mode("classification")
+
+mr_wkflow <- workflow() %>% add_model(mr_model) %>% add_recipe(pokemon_recipe)
+
+pokemon_grid <- grid_regular(mixture(range = c(0,1)), penalty(range = c(-5,5)), levels = 10)
+```
+We are fitting a total of 500 models.
+
+# 6
+```{r}
+pokemon_fit <- tune_grid(mr_wkflow, resamples = pokemon_fold, grid = pokemon_grid)
+```
+```{r}
+autoplot(pokemon_fit)
+```
+Larger amount of regularization results in higher accuracy but the difference became trivial when the amount of regularization reaches a certain value.
+
+The amount of regularization affects ROC AUC as well, smaller values of penalty and mixture results in higher ROC AUC.
+
+# 7
+```{r}
+pokemon_best_model <- select_best(pokemon_fit, metric = "roc_auc")
+pokemon_best_model
+```
+Optimal values: penalty:0.02154435, mixture: 0.4444444.
+
+```{r}
+final_wkflow <- finalize_workflow(mr_wkflow, pokemon_best_model)
+final_fit <- fit(final_wkflow, data = pokemon_training2)
+```
+
+Model testing
+```{r}
+test_fit <- augment(final_fit, new_data = pokemon_testing)%>%
+  roc_auc(truth = type_1, .pred_Bug, .pred_Fire, .pred_Grass, .pred_Normal, .pred_Water)
+test_fit
+```
+The resulting ROC AUC on the testing set is 0.6941762.
+
+# 8
+```{r}
+test_fit1 <- augment(final_fit, new_data = pokemon_testing)%>%
+  roc_curve(truth = type_1, .pred_Bug, .pred_Fire, .pred_Grass, .pred_Normal, .pred_Water)
+autoplot(test_fit1, type = 'heatmap')
+```
+We can see that we are missing the psychic type because all observations with psychic type pokemon were assigned to the training set.
+The model is doing well predicting Normal type while doing relatively bad predicting water type. I cannot come up with a reasonable explanation, but my guess is that maybe the different distributions of the types in the training set is causing the difference in performance of the model. 
+
