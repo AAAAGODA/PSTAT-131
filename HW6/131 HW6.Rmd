@@ -1,0 +1,187 @@
+# 131 HW6
+
+```{r}
+library(janitor)
+library(ggplot2)
+library(dplyr)
+library(tidyverse)
+library(tidymodels)
+library(corrplot)
+library(rpart.plot)
+library(ranger)
+library(vip)
+library(xgboost)
+```
+
+# Q1
+```{r}
+pokemon <- read.csv('data/pokemon.csv')
+pokemon1 <- clean_names(pokemon)
+
+pokemon_filtered <- pokemon1 %>%
+  filter(type_1 == "Bug" | type_1 == "Fire" | type_1 == "Grass" | type_1 == "Normal" | type_1 == "Water" | type_1 == "Physic")
+
+pokemon_filtered$type_1 <- as.factor(pokemon_filtered$type_1)
+pokemon_filtered$legendary <- as.factor(pokemon_filtered$legendary)
+pokemon_filtered$generation <- as.factor(pokemon_filtered$generation)
+
+set.seed(3435)
+pokemon_split <- initial_split(pokemon_filtered, prop = 0.7,
+                               strata = type_1)
+pokemon_testing <- testing(pokemon_split)
+pokemon_training <- training(pokemon_split)
+
+pokemon_fold <- vfold_cv(pokemon_training, v = 5, strata = type_1)
+
+pokemon_training2 <- pokemon_training %>% dplyr :: select(type_1, legendary, 
+                                                          generation, sp_atk, attack, speed, defense, hp, sp_def)
+pokemon_recipe <- recipe(type_1 ~ ., data = pokemon_training2) %>% step_dummy(legendary) %>% 
+  step_dummy(generation) %>% step_normalize(all_predictors())
+```
+
+# Q2
+```{r}
+pokemon_cor <- pokemon_training2 %>% select_if(is.numeric) %>%
+  cor() %>% corrplot(type = "lower", diag = FALSE)
+```
+I chose only the numerical variables for the correlation matrix since these numeric variables are the combat stat of the pokemons which I thought was worth looking at.
+
+From the correlation matrix, we can see that defense has a relatively strong correlation with sp_def which make sense to me since sp_def is the resistance to special attacks while defense is the resistance to attacks.
+
+# Q3
+```{r}
+tree_spec <- decision_tree() %>% set_engine("rpart") %>% set_mode("classification")
+tree_wf <- workflow() %>%
+  add_model(tree_spec %>% set_args(cost_complexity = tune())) %>%
+  add_recipe(pokemon_recipe)
+
+pokemon_grid <- grid_regular(cost_complexity(range = c(-3, -1)), levels = 10)
+tune <- tune_grid(tree_wf, resamples = pokemon_fold,
+  grid = pokemon_grid, metrics = metric_set(roc_auc))
+autoplot(tune)
+```
+From the plot, we can see that roc_auc increases gradually with Cost-Complexity at first, when it reaches the peak value, it started to decrease drastically. In conclusion, picking a medium value for complexity penalty would result in the best performing tree.
+
+# Q4
+```{r}
+collect_metrics(tune) %>% arrange(mean)
+best_complexity <- select_best(tune, metric = "roc_auc")
+best_complexity
+```
+The roc_auc of the best performing model is 0.6191840, with cost_complexity 0.007742637
+
+# Q5
+```{r}
+final_tree <- finalize_workflow(tree_wf, best_complexity)
+final_fit <- fit(final_tree, data = pokemon_training)
+final_fit %>% extract_fit_engine() %>% rpart.plot(roundint = FALSE)
+```
+
+```{r}
+forest_spec <- rand_forest() %>% set_engine("ranger", importance = "impurity") %>%
+  set_mode("classification")
+
+forest_wf <- workflow() %>% 
+  add_model(forest_spec %>% 
+  set_args(mtry = tune(), trees = tune(), min_n = tune())) %>%
+  add_recipe(pokemon_recipe)
+```
+
+mtry: The number of predictors that will be randomly sampled with each split.
+trees: The number of trees.
+min_n: Minimum number of points to make a split.
+
+```{r}
+pokemon_grid2 <- grid_regular(mtry(range = c(1,8)), trees(range(1,200)), min_n(range(1,20)), levels = 8)
+multi_tune <- tune_grid(
+  forest_wf, resamples = pokemon_fold, grid = pokemon_grid2, metrics = metric_set(roc_auc))
+```
+The range of mtry must be 1-8 because we cannot have 0 predictors and we only have a total of 8 predictors.
+mtry = 8 means the model will have 8 randomly sampled variables
+
+# Q6
+```{r}
+autoplot(multi_tune)
+```
+From the plots, we can see that 1 tree has low roc_auc while 200 trees has the highest roc_auc in general. mtry seems to have a random effect on roc_auc. min_n does not seem to have huge effect on model performance.
+
+# Q7
+```{r}
+collect_metrics(multi_tune) %>% arrange(mean)
+best_model <- select_best(multi_tune, metric = "roc_auc")
+best_model
+```
+The best model has roc_auc of 0.7251056 with mtry = 5, trees = 143, min_n = 6.
+
+# Q8
+```{r}
+final_best_model <- finalize_workflow(forest_wf, best_model)
+final_best_fit <- fit(final_best_model, data = pokemon_training)
+final_best_fit %>% extract_fit_engine() %>% vip()
+```
+The most useful variables are sp_atk, defense, speed, hp, sp_def, attack which makes sense because they are the main features of a pokemon. The least useful variable is generation.
+
+# Q9
+```{r}
+boost_spec <- boost_tree() %>% set_engine("xgboost") %>% set_mode("classification")
+boost_wf <- workflow() %>%
+  add_model(boost_spec %>% set_args(trees = tune())) %>%
+  add_recipe(pokemon_recipe)
+
+boost_grid <- grid_regular(trees(range = c(10,2000)), levels = 10)
+
+boost_tune <- tune_grid(boost_wf, resamples = pokemon_fold,
+  grid = boost_grid, metrics = metric_set(roc_auc))
+autoplot(boost_tune)
+```
+Larger value of trees result in higher roc_auc, but when value of trees exceeds 250, the roc_auc starts decreasing gradually.
+
+```{r}
+collect_metrics(boost_tune) %>% arrange(mean) 
+best_boost_model <- select_best(boost_tune, metric = "roc_auc")
+best_boost_model
+```
+The roc_auc of my best_performing model is 0.7135988.
+
+# Q10
+```{r}
+pruned_roc_auc <- collect_metrics(tune) %>% arrange(-mean)
+forest_roc_auc <- collect_metrics(multi_tune) %>% arrange(-mean)
+boost_roc_auc <- collect_metrics(boost_tune) %>% arrange(-mean)
+roc_auc <- c(pruned_roc_auc$mean[1], forest_roc_auc$mean[1], boost_roc_auc$mean[1])
+roc_auc
+```
+The random forest model performed the best while pruned tree performed the worst.
+
+```{r}
+best_forest <- select_best(multi_tune)
+best_forest_model <- finalize_workflow(forest_wf, best_forest)
+best_forest_fit <- fit(best_forest_model, data = pokemon_testing)
+
+prediction <- augment(best_forest_fit, new_data = pokemon_testing) %>%
+  select(type_1, 
+         .pred_class,
+         .pred_Bug,
+         .pred_Fire,
+         .pred_Grass,
+         .pred_Normal, 
+         .pred_Water)
+
+accuracy(prediction, type_1, .pred_class)
+prediction %>%
+  roc_curve(type_1,.pred_Bug, 
+                   .pred_Fire, 
+                   .pred_Grass, 
+                   .pred_Normal,
+                   .pred_Water) %>%
+  autoplot()
+
+prediction %>%
+  conf_mat(type_1, .pred_class) %>%
+  autoplot(type = "heatmap")
+```
+Like last homework, my testing set does not contain psychic type pokemon.
+Accuracy is 0.9754098.
+
+My model was performing best on predicting Bug type pokemon while performing worst on predicting fire type pokemon.
+
