@@ -1,0 +1,17 @@
+blueFirstBlood: whether the blue team gets the first kill of the game or not (0:lose  1:win)
+
+blueKills: the number of champion kills that the blue team gets by 10 minutes of the game (integer)
+
+blueDeaths: the number of deaths of blue team champions (integer)
+ 
+blueDragons: whether the blue team gets the first dragon or not (0:no  1:yes)
+
+blueHeralds: whether the blue team gets the first Heralds or not (0:no  1:yes)
+
+blueTotalMinionsKilled: the number of minions killed by blue team champions at 10 minutes (integer)
+
+blueGoldDiff: the difference in total gold between blue team and red team (integer)
+
+blueExperienceDiff: the difference in total champion experience between blue team and red team (integer)
+
+blueWardsDestroyed: the number of red team wards destroyed by blue team at 10 minutes (integer)
