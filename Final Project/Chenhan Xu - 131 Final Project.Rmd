@@ -1,0 +1,384 @@
+---
+title: "PSTAT 131 Final Project"
+
+output:
+  
+  html_document:
+    code_folding: hide
+  pdf_document: default
+date: "2022-11-02"
+text-align: center
+fontsize: 12pt
+geometry: margin = 1in
+---
+
+**By Chenhan Xu**
+
+**University of California, Santa Barbara**
+
+**Supervisor: Prof. Katie Coburn**
+
+<p align="center">
+  ![](sup materials/logo.png)
+</p>
+
+# Introduction
+
+League of Legends is one of the most famous competitive computer games in the world nowadays. This project aims to find an accurate machine learning model to predict whether a team loses or wins based on the game stat in the first 10 minutes of the game. The dataset I chose records a number of game statistics for the blue team at 10 minutes of the game. All data were collected from high-diamond to master ranked games.
+
+# What is League of Legends?
+
+League of Legends is an online competitive video game that requires 10 players per game. The 10 players are separated into two teams(blue and red) to fight each other. Each player is able to control a champion with unique abilities and features. The goal of the teams is to destroy the enemy base by cooperating with their teammates. During the match, players are able to gain gold and experience from multiple sources including killing minions, destroying enemy defensive measures, and killing enemy champions, etc. to enhance the ability of their champions. Also, there are special monsters in the map that can provide additional buff for the team that killed them. Players need to build up strategies and gain advantages through various ways in order to win the game.
+
+<p align="center">
+  ![](sup materials/lolpic.jpeg)
+</p>
+
+# Why is the model relevent?
+
+As one of the most famous video games in the world, there are countless League of Legends tournaments every year around the globe. Due to the complexity of the game, one cannot easily predict the result of the game in early stages. However, the audiences are often curious about which team has more chance of winning. A well-performing machine learning model might provide a reliable result for that question. Moreover, by analyzing the importance of different factors that affect the process of the game, professional teams can decide their strategy based on the model and focus on the objectives that increase the probability of winning most. As a huge fan of League of Legends myself, I found this project really meaningful and interesting!
+
+# Methodology
+
+For this project, I am going to apply the technique of supervised machine learning to eventually find an optimal model for predicting the result of the game based on the statistics at 10 minutes of the game. Starting with exploratory data analysis, I am going to choose 9 predictor variables that can provide the most information and try 5 different types of machine learning model. Finally, I will use the best model determined by roc_auc and accuracy and fit it to the testing set to see how it actually performs.
+
+# Loading Data and Packages
+
+```{r class.source = 'fold-show', results='hide', message=FALSE, warning=FALSE}
+# Importing packages
+library(dplyr)
+library(tidyverse)
+library(tidymodels)
+library(ggplot2)
+library(corrplot)
+library(xgboost)
+library(glmnet)
+library(janitor)
+library(MASS)
+library(discrim)
+library(vip)
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+## Importing data 
+
+```{r class.source = 'fold-show', results='hide'}
+# Importing original data
+setwd("C:/Users/Adam/Desktop/PSTAT 131/PSTAT-131/Final Project/data")
+original_data <- read.csv("C:/Users/Adam/Desktop/PSTAT 131/PSTAT-131/Final Project/data/high_diamond_ranked_10min.csv")
+original_data <- original_data %>% janitor :: clean_names()
+head(original_data)
+```
+The original data contains 9879 observations and 40 variables.
+
+# Data Cleaning
+
+```{r class.source = 'fold-show'}
+# Excluding observations with NA data.
+original_data <- na.omit(original_data)
+
+# Selecting predictor variables
+lol <- original_data %>% dplyr :: select(blue_wins, blue_first_blood, blue_kills, blue_deaths,
+                                       blue_dragons, blue_heralds, blue_total_minions_killed, 
+                                       blue_gold_diff, blue_experience_diff, blue_wards_destroyed)
+head(lol)
+```
+
+**predictors:**
+
+* blueFirstBlood: whether the blue team gets the first kill of the game or not (0 or 1)
+
+* blueKills: the number of champion kills that the blue team gets by 10 minutes of the game
+
+* blueDeaths: the number of deaths of blue team champions
+ 
+* blueDragons: whether the blue team gets the first dragon or not (0 or 1)
+
+* blueHeralds: whether the blue team gets the first Heralds or not (0 or 1)
+
+* blueTotalMinionsKilled: the number of minions killed by blue team champions at 10 minutes
+
+* blueGoldDiff: the difference in total gold between blue team and red team
+
+* blueExperienceDiff: the difference in total champion experience between blue team and red team
+
+* blueWardsDestroyed: the number of red team wards destroyed by blue team at 10 minutes
+
+## Turning variables into factors
+```{r class.source = 'fold-show'}
+# Turning categorical variables into factors
+lol$blue_wins <- as.factor(lol$blue_wins)
+lol$blue_first_blood <- as.factor(lol$blue_first_blood)
+lol$blue_dragons <- as.factor(lol$blue_dragons)
+lol$blue_heralds <- as.factor(lol$blue_heralds)
+lol$blue_wards_destroyed <- as.factor(lol$blue_wards_destroyed)
+```
+
+
+# Data Split
+
+```{r class.source = 'fold-show'}
+# Splitting data into training and testing set
+set.seed(3435)
+lol_split <- initial_split(lol, prop = 0.75,
+                           strata = blue_wins)
+
+lol_train <- training(lol_split)
+lol_test <- testing(lol_split)
+dim(lol_train)
+dim(lol_test)
+```
+I chose to split the data with proportion of 0.75 so that the training set contains 7408 observations while the testing set contains 2471 observations. The amount of observations should be enough for my model.
+
+
+# Exploratory Data Analysis
+
+The entire exploratory data analysis part will only based on the training set.
+
+## Barplot
+
+```{r class.source = 'fold-show'}
+# Barplot representing count for the response variable
+ggplot(lol_train, aes(x = blue_wins)) + geom_bar() + geom_text(stat='count', aes(label = ..count..), vjust = -1) +
+                                coord_cartesian(ylim = c(0,4000)) + 
+                                ggtitle("count of wins/losses for blue team") +
+                                theme(plot.title = element_text(hjust = 0.5))
+```
+
+The bar plot shows that blue team wins 3697 games while losing 3711 games. The ratio of win v.s. lose is quite close to 1:1.
+
+
+## Correlation matrix
+
+```{r class.source = 'fold-show'}
+lol_num_var <- lol %>%  select_if(is.numeric) # Select only the numeric variables
+
+lol_cor <- cor(lol_num_var)  
+lol_cor_plt <- corrplot(lol_cor, 
+                        order = 'AOE', 
+                        col = COL2("PiYG")) # Plot correlation matrix
+```
+
+From the correlation matrix, we can see that blueGoldDiff and blueExperienceDiff have relatively strong positive correlation. It makes sense because gold and experience should be positively correlated as they both imply the advantage of the blue team. In my case, both gold and experience are represented by the difference between blue team and red team, so it is reasonable that the two variables have (strong) positive correlated.
+
+
+
+## Histogram of Variable: blueGoldDiff
+
+```{r class.source = 'fold-show'}
+ggplot(lol_train, aes(x = blue_gold_diff)) + geom_histogram(bins = 25)
+```
+
+By looking at the histogram above, we can see that the distribution of the variable blueGoldDiff is quite close to a normal distribution which is probably because that the sample size is quite large. 
+
+## Histogram of Vairable: blueExperienceDiff
+
+```{r class.source = 'fold-show'}
+ggplot(lol_train, aes(x = blue_experience_diff)) + geom_histogram(bins = 25)
+```
+
+Same as blueGoldDiff, the variable blueExperienceDiff also has a distribution close to normal distribution, which is ideal for further model building.
+
+# Model Building
+
+Since I am building model for classification problem, I decide to fit the following models: Boost Tree model, Decision Tree model, Random Forest model, Quadratic discriminate analysis model, and logistic regression model.
+
+## Building Recipe
+
+**Recipe includes the response variable blueWins and 9 predictor variables.**
+
+```{r class.source = 'fold-show', results='hide'}
+head(lol_train)
+lol_recipe <- recipe(blue_wins ~ ., data = lol_train)
+
+# dummy code the categorical variable
+lol_recipe <- lol_recipe %>% step_dummy(blue_first_blood)
+lol_recipe <- lol_recipe %>% step_dummy(blue_dragons)
+lol_recipe <- lol_recipe %>% step_dummy(blue_heralds)
+lol_recipe <- lol_recipe %>% step_dummy(blue_wards_destroyed)
+lol_recipe <- lol_recipe %>% step_interact(~ blue_gold_diff : blue_experience_diff)
+```
+
+Since the variables blueGoldDiff and blueExperienceDiff have high correlation, I decided to create interaction between the two variables.
+
+## Cross Validation
+```{r class.source = 'fold-show', results='hide'}
+# applying v-fold cross validation with v = 10
+set.seed(3435)
+lol_fold <- vfold_cv(lol_train, v = 10, strata = blue_wins)
+lol_fold
+```
+
+I decide to use v-fold cross validation with v = 10 to tune the tree models in order to find the best parameters for the optimal model.
+
+## Models:
+
+**1. Boost Tree Model**
+
+```{r class.source = 'fold-show'}
+boost_tree <- parsnip :: boost_tree() %>%
+  set_engine('xgboost') %>%
+  set_mode('classification')
+
+boost_workflow <- workflow() %>%
+  add_model(boost_tree %>% set_args(trees = tune())) %>%
+  add_recipe(lol_recipe)
+
+boost_grid <- grid_regular(trees(range = c(10, 2000)), levels = 10)
+
+tune_res_boost <- tune_grid(
+  boost_workflow,
+  resamples = lol_fold,
+  grid = boost_grid,
+  metrics = metric_set(roc_auc))
+```
+
+```{r class.source = 'fold-show'}
+autoplot(tune_res_boost)
+collect_metrics(tune_res_boost) %>% arrange(-mean)
+best_boost_model <- select_best(tune_res_boost, metric = "roc_auc")
+best_boost_model
+```
+
+From the result above, we can see that the best boost tree model has roc_auc of 0.7967586. The number of trees for the optimal model is 10. From the plot, we can see that roc_auc decreases constantly as the number of trees increases.
+
+**2. Decision Tree Model**
+
+```{r class.source = 'fold-show'}
+tree_model <- decision_tree() %>%
+  set_engine('rpart') %>%
+  set_mode('classification')
+
+# Tune cost_complexity
+tree_workflow <- workflow() %>%
+  add_model(tree_model %>% set_args(cost_complexity = tune())) %>%
+  add_recipe(lol_recipe)
+
+tree_grid <- grid_regular(cost_complexity(range = c(-3, 3)), levels = 10)
+
+tune_res_tree <- tune_grid(
+  tree_workflow,
+  resamples = lol_fold,
+  grid = tree_grid,
+  metrics = metric_set(roc_auc))
+```
+```{r class.source = 'fold-show'}
+autoplot(tune_res_tree)
+collect_metrics(tune_res_tree) %>% arrange(-mean)
+best_complexity <- select_best(tune_res_tree, metric = "roc_auc")
+best_complexity
+```
+From the result above, we can see that the best decision tree model has roc_auc of 0.7713448. The best decision tree model has a cost_complexity of 0.007742637. From the plot, we can see that the roc_auc of the model decreases as cost-complexity increases.
+
+
+**3. Random Forest Model**
+```{r class.source = 'fold-show'}
+random_for <- rand_forest() %>%
+  set_engine("ranger", importance = "impurity") %>%
+  set_mode("classification")
+
+random_for_workflow <- workflow() %>%
+  add_model(random_for %>% set_args(mtry = tune(),
+                            trees = tune(),
+                            min_n = tune())) %>%
+  add_recipe(lol_recipe)
+
+random_for_grid <- grid_regular(mtry(range = c(1, 7)), 
+                                trees(range = c(64, 128)),
+                                min_n(range = c(30, 150)), levels = 5)
+
+tune_res_random_for <- tune_grid(
+  random_for_workflow, 
+  resamples = lol_fold, 
+  grid = random_for_grid, 
+  metrics = metric_set(roc_auc)
+)
+```
+
+*NOTE:*
+
+*mtry: The number of predictors that will be randomly sampled with each split.*
+
+*trees: The number of trees.*
+
+*min_n: Minimum number of points to make a split.*
+
+```{r class.source = 'fold-show'}
+autoplot(tune_res_random_for)
+collect_metrics(tune_res_random_for) %>% arrange(-mean)
+best_for <- select_best(tune_res_random_for, metric = "roc_auc")
+best_for
+```
+From the result above, we can see that the best random forest model has roc_auc of 0.8049521. The three parameters for the optimal random forest model are mtry = 7, trees = 64, min_n = 150.
+
+
+**4. Quadratic Discriminant Analysis Model**
+
+```{r class.source = 'fold-show'}
+qda_mod <- discrim_linear() %>%
+  set_mode('classification') %>%
+  set_engine('MASS')
+
+qda_workflow <- workflow() %>%
+  add_model(qda_mod) %>% 
+  add_recipe(lol_recipe)
+
+qda_fit <- fit(qda_workflow, lol_train)
+
+acc1 <- augment(qda_fit, new_data=lol_test) %>% 
+  accuracy(truth = blue_wins, estimate = .pred_class)
+
+acc1
+```
+The best quadratic discriminant analysis model has an accuracy of 0.7373533.
+
+**5. Logistic regression model**
+```{r class.source = 'fold-show'}
+log_mod <- logistic_reg() %>%
+  set_mode('classification') %>%
+  set_engine('glm')
+
+log_workflow <- workflow() %>%
+  add_model(log_mod) %>% 
+  add_recipe(lol_recipe)
+
+log_fit <- fit(log_workflow, lol_train)
+
+acc2 <- augment(log_fit, new_data=lol_test) %>% 
+  accuracy(truth = blue_wins, estimate = .pred_class)
+
+acc2
+```
+The best logistic regression model has an accuracy of 0.7389721.
+
+# Final Model Selection
+
+From the results above, the random forest model is the best model for my data as it has the highest roc_auc, meaning it has the highest accuracy in predicting the response variable.
+
+```{r class.source = 'fold-show'}
+final_best_model <- finalize_workflow(random_for_workflow, best_for)
+final_best_fit <- fit(final_best_model, data = lol_train)
+final_best_fit %>% extract_fit_engine() %>% vip()
+```
+
+Using the vip() function, we can see that the variables blueGoldDiff and blueExperienceDiff are the most important variables among all predictor variables. This result is not surprising, because gold and experience of the team can most obviously represent how the team is performing during the game.
+
+## Testing the model on the testing set
+
+```{r class.source = 'fold-show'}
+set.seed(3435)
+best_forest <- select_best(tune_res_random_for)
+best_forest_model <- finalize_workflow(random_for_workflow, best_forest)
+best_forest_fit <- fit(best_forest_model, data = lol_test)
+prediction <- augment(best_forest_fit, new_data = lol_test)
+
+accuracy(prediction, blue_wins, .pred_class)
+
+```
+
+By using random forest as my final model, I fit the model with the optimal parameters and compare the predictions to the actual results which is based on the testing set. I got an accuracy of 0.7681101 on the testing set which is quite satisfying for such a complex model. However, I think the model can be further improved by adding more useful predictor variables and removing those relatively uncorrelated variables.
+
+# Conclusion
+
+The final model that has the optimal performance is the random forest model which has an roc_auc of 0.8049521. The accuracy of my final model is about 0.768 which is a satisfying number considering the complexity of the game itself. From my perspective, the model can be further improved by adding several predictor variables that captures additional information such as the difference in average rank scores of the players in the two teams. 
+Besides the flaws in the model, the inaccuracy might be caused by the complex nature of the game itself. The result of the game can be affected by various factors which cannot be captured by the model including the difference in the level of skills of each player(impossible to measure). Another reason of the inaccuracy might be the data itself. The game has an average duration of approximately 40 minutes, which means that the game stats at 10 min cannot fully represent the whole picture of the match and there are still infinite possibilities in late games. As a player myself, I have witnessed countless impossible comebacks in late games accomplished by flawless team cooperation and decisive plays. With this being said, I believe a dataset that contains game stats at a later time of the game will result in a model with higher accuracy. However, predicting the result in early games is definitely more meaningful than making predictions in late games. In conclusion, I consider my final model as a success.
